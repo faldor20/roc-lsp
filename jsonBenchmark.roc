@@ -18,15 +18,19 @@ app "time"
     provides [main] to pf
 
 benchmark = \func, name, times ->
+    _ <- Stdout.line "$(name): Starting $(times |> Num.toStr) runs" |> Task.await
+
     start <- Utc.now |> Task.await
 
     _ <- runBenchmark func times |> Task.await
 
     finish <- Utc.now |> Task.await
 
-    duration = (Utc.deltaAsMillis start finish) |> Num.toStr
+    duration = Utc.deltaAsMillis start finish
 
-    Stdout.line "$(name): Completed $(times |> Num.toStr) runs in $(duration)ms"
+    average= Num.divCeil (duration|>Num.toU64) times
+
+    Stdout.line "$(name): Completed $(times |> Num.toStr) runs in $(duration |> Num.toStr)ms, average $(average|> Num.toStr)ms"
 runBenchmark = \func, times ->
     _ <- (benchLoop func times) |> Task.await
     Task.ok {}
@@ -38,39 +42,62 @@ benchLoop = \fn, times ->
         _ = fn {}
         {}
     |> Task.ok
+isWhitespace = \b ->
+    when b is
+        ' ' | '\n' | '\r' | '\t' -> Bool.true
+        _ -> Bool.false
+trimWhitespace = \file ->
+    lastWhitespace =
+        file
+        |> List.walkBackwardsUntil 0 \state, byte ->
+            if byte |> isWhitespace then
+                state + 1 |> Continue
+            else
+                (state) |> Break
+    file |> List.dropLast (lastWhitespace)
 
-input = \{} ->
-    file<-File.readBytes (Path.fromStr "./small-json.json") |>Task.await
-    {}<-Stdout.line "file read" |> Task.await
-    Task.ok (file|>List.dropLast 1)
+input = \fileName ->
+    file <- File.readBytes (Path.fromStr fileName) |> Task.await
+    trimmed = file |> trimWhitespace
+    {} <- Stdout.line "file read,last $(List.last trimmed |> Inspect.toStr)" |> Task.await
+    Task.ok trimmed
 
-
+handleDecode = \res ->
+    when res is
+        Ok a -> Ok a
+        Err (Leftover e) -> crash "Failed to decode json $(e |> List.takeLast 100 |> Str.fromUtf8 |> Result.withDefault "utf8fail")"
+        e -> crash "error $(e |> Inspect.toStr)"
 
 runBenchmarks = \_ ->
-    file <- input {}  |>Task.await
+    file <- input "small-json.json" |> Task.await
+    formattedFile <- input "formatted-json.json" |> Task.await
+    times=5
     {} <- Stdout.line "starting" |> Task.await
     {} <- (\_ ->
             a : Result JsonVal2.JsonVal _
-            a = Decode.fromBytes file Core.json
-            when a is
-                Ok _ -> Ok {}
-                Err (Leftover e) -> crash "JsonVal2 Failed to decode json $(e|>List.takeLast 100|>Str.fromUtf8|>Result.withDefault "utf8fail")"
-                e->crash "error $(e|>Inspect.toStr)"
-            )
-        |> benchmark "jsonVal2" 1
+            a = Decode.fromBytes file Core.json |> handleDecode
+            a
+        )
+        |> benchmark "jsonVal2" times
         |> Task.await
+    {} <- Stdout.line "starting" |> Task.await
+    {} <- (\_ ->
+            a : Result JsonVal2.JsonVal _
+            a = Decode.fromBytes file Core.json |> handleDecode
+            a
+        )
+        |> benchmark "jsonVal2 Lots of whitespace" 1
+        |> Task.await
+    {} <- Stdout.line "starting Next" |> Task.await
+    {} <- (\_ ->
+            a : Result (List { id : Str }) _
+            a = Decode.fromBytes file Core.json |> handleDecode
+            a
+        )
+        |> benchmark "json id only" times
+        |> Task.await
+    {} <- Stdout.line "starting Next" |> Task.await
     # {} <- (\_ ->
-    #         a : Result (List {id:Str}) _
-    #         a = Decode.fromBytes file Core.json
-    #         when a is
-    #             Ok _ -> Ok {}
-    #             Err (Leftover e) -> crash "JsonIdOnly Failed to decode json $(e|>List.takeLast 100|>Str.fromUtf8|>Result.withDefault "utf8fail")"
-    #             e->crash "error $(e|>Inspect.toStr)"
-    #         )
-    #     |> benchmark "json id only" 1
-    #     |> Task.await
-    # {} <- Stdout.line "starting Next" |> Task.await
-    # {} <- (\_ -> 
     #     when JsonVal.fromBytes file is
     #         Ok _ -> Ok {}
     #         Err e -> crash "JsonVal Failed to decode json $(e|>Inspect.toStr)"

@@ -47,6 +47,8 @@ getUnchecked = \lst, index ->
         Err _ ->
             indexS = index |> Num.toStr
             crash "index: $(indexS) out of bounds"
+
+#---- LUT for whitespace----
 # whitespaceArr =
 #     List.range { start: At 0, end: At 255 }
 #     |> List.map \i ->
@@ -60,6 +62,7 @@ getUnchecked = \lst, index ->
 # isWhitespace = \c ->
 #     whitespaceArr
 #     |> getUnchecked (c |> Num.toU64)
+
 isWhitespace = \b ->
     when b is
         ' ' | '\n' | '\r' | '\t' -> Bool.true
@@ -68,6 +71,31 @@ eatWhitespace = \bytes ->
     when bytes is
         [a, ..] if isWhitespace a -> eatWhitespace (List.dropFirst bytes 1)
         _ -> bytes
+#---whitespace many matches, no difference ----
+# notWhitespace = \b ->
+#     when b is
+#         ' ' | '\n' | '\r' | '\t' -> Bool.false
+#         _ -> Bool.true
+# eatWhitespace = \bytes ->
+#     when bytes is
+#         [a, ..] if notWhitespace a -> bytes
+#         [_,a, ..] if notWhitespace a -> eatWhitespace (List.dropFirst bytes 1)
+#         [_,_,a, ..] if notWhitespace a -> eatWhitespace (List.dropFirst bytes 2)
+#         [_,_,_,a, ..] if notWhitespace a -> eatWhitespace (List.dropFirst bytes 3)
+#         [_,_,_,_,a, ..] if notWhitespace a -> eatWhitespace (List.dropFirst bytes 4)
+#         [_,_,_,_,_,a, ..] if notWhitespace a -> eatWhitespace (List.dropFirst bytes 5)
+#         [_,_,_,_,_,_,a, ..] if notWhitespace a -> eatWhitespace (List.dropFirst bytes 6)
+#         _ -> eatWhitespace (List.dropFirst bytes 7)
+#---- whitespace using List get, no difference -----
+# eatWhitespaceHelper: List U8, U64->U64
+# eatWhitespaceHelper = \bytes, ws ->
+#     if isWhitespace (bytes|>List.getUnsafe ws) then
+#          (eatWhitespaceHelper bytes (ws+1))
+#     else ws
+# eatWhitespace: List U8->List U8
+# eatWhitespace = \bytes ->
+#     wsCount=eatWhitespaceHelper bytes 0
+#     bytes|>List.dropFirst wsCount
 
 decErr= \rest->{rest, result:Err TooShort}
 decOk= \rest, res->{rest, result:Ok res}
@@ -124,7 +152,7 @@ recordField = \wBytes,dict->
             {rest,result:Ok key} ->
                 when eatWhitespace rest is
                     [':', .. as rest2] -> 
-                        when rest2|>Decode.decodeWith valueDecode Core.json is 
+                        when rest2|>valueDecode  is 
                             {rest:rest3,result:Ok v} ->
                                 nDict=dict|>Dict.insert key v 
                                 when eatWhitespace rest3 is
@@ -144,7 +172,7 @@ list = \bytes ->
             listBody listBytes []
 
 listBody = \bytes, lst->
-    when bytes|>Decode.decodeWith valueDecode Core.json is
+    when bytes|>valueDecode is
         {rest,result:Ok v} ->
             
             newLst= lst |> List.append v
@@ -155,9 +183,9 @@ listBody = \bytes, lst->
         {rest,result:Err e}->decErr bytes
         
 isNumStart = \char -> char >= '0' && char <= '9' || char == '+' || char == '-' || char == '.' || char == 'e' || char == 'E'
-valueDecode = 
+valueDecode = \ wBytes->
 ##TODO try removing this
-    Decode.custom\ wBytes, fmt->
+ 
         out= \t,v-> @JsonVal (t v)  
         bytes=eatWhitespace wBytes
         
@@ -181,22 +209,6 @@ valueDecode =
             _->decErr bytes
         # TODO: numbers and null
     
-isValidEnd : U8 -> Bool
-isValidEnd = \b ->
-    when b is
-        ']' | ',' | ' ' | '\n' | '\r' | '\t' | '}' -> Bool.true
-        _ -> Bool.false
-
-# takeNumRaw = \bytes ->
-#     endIdx = bytes |> List.findFirstIndex (isValidEnd)
-#     when endIdx is
-#         Ok end ->
-#             numBytes = bytes |> List.takeFirst end 
-#             rest=bytes |> List.dropFirst (end )
-#             dbg numBytes|>Str.fromUtf8
-#             decOk rest (@JsonVal (RawNum numBytes))
-
-#         Err a -> decErr bytes
 
 takeStrRaw=\ bytes->
     # walk pairwise along the list 
@@ -238,6 +250,8 @@ takeJStrRaw=\ bytes->
             decOk (bytes|>List.dropFirst (index+1))(jString(s))
         Err a-> 
             decErr bytes
+jsonValDecoder=Decode.custom \bytes, fmt->valueDecode bytes
+    
 expect 
     input= 
     """
@@ -279,9 +293,6 @@ expect
     res.rest==[':'] && strOk
 
 
-jsonValDecoder=
-    valueDecode
-    
     
 
 
